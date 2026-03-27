@@ -27,6 +27,7 @@ Une interface utilisateur (UI) viendra prochainement compléter l'API. Elle perm
 - Maven
 - Framework : Spring Boot
 
+
 ## 🏃 Comment lancer le projet en local
 
 ### Démarrer l'API (Backend)
