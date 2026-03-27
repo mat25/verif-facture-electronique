@@ -1,54 +1,112 @@
-# 📄 Vérificateur de Facture Électronique
+# 📄 VerifFacture — Vérificateur de Facture Électronique
 
-Ce projet permet de **valider la conformité structurelle et métier des factures électroniques** au format XML (notamment UBL 2.1), conformément aux normes européennes (EN16931) et aux spécificités françaises (EXTENDED, BR-FR).
-
-## 🚀 Architecture du projet
-
-Le projet est pensé pour être découpé en deux grandes parties : un moteur de validation (Backend) et une interface utilisateur (Frontend).
-
-### 1. Backend (Disponible) ⚙️
-Une API REST développée en **Java / Spring Boot**. C'est le cœur métier de l'application qui se charge de vérifier les factures entrantes.
-- **Dossier :** `/backend`
-- **Validation XSD** : Vérifie que la structure du fichier XML respecte strictement le dictionnaire et la syntaxe UBL 2.1.
-- **Validation Schematron** : Utilise la librairie `ph-schematron` pour appliquer un ensemble de règles métier conditionnelles selon le format demandé (EN16931 standard européen, ou EXTENDED avec règles françaises).
-
-### 2. Frontend (À venir) 🖥️
-Une interface utilisateur (UI) viendra prochainement compléter l'API. Elle permettra :
-- Le téléchargement (drag & drop) des factures XML par l'utilisateur.
-- La sélection du profil de vérification souhaité.
-- Un affichage clair et lisible des rapports d'erreurs (formatage des retours XSD et assertions échouées issues de SVRL).
+Application de **validation de factures électroniques** au format XML (UBL 2.1), conforme aux normes européennes (EN16931) et aux règles françaises de la réforme CTC (EXTENDED, BR-FR).
 
 ---
 
-## 🛠️ Trépied technique & Prérequis
+## 🏗️ Architecture
 
-**Backend**
-- Java 17 (ou supérieur)
-- Maven
-- Framework : Spring Boot
-
-
-## 🏃 Comment lancer le projet en local
-
-### Démarrer l'API (Backend)
-1. Ouvrez un terminal à la racine du projet.
-2. Naviguez dans le répertoire backend :
-   ```bash
-   cd backend
-   ```
-3. Démarrez l'application via Maven :
-   ```bash
-   mvn spring-boot:run
-   ```
-4. L'API sera accessible localement (ex: sur `http://localhost:8080`).
-
-### Démarrer le Frontend
-*(Partie en cours de construction - Les instructions d'installation et de lancement arriveront avec l'initialisation du front-end !)*
+```
+verif-facture-electronique/
+├── backend/      → API REST Java / Spring Boot (moteur de validation)
+└── frontend/     → Interface web Vue 3 + Vite
+```
 
 ---
 
-## 📌 Formats supportés
+## ⚙️ Backend — API Spring Boot
 
-Actuellement, le validateur embarque les Schematrons pour :
-- **EN16931** (Norme Européenne de base)
-- **EXTENDED** + **BR-FR** (Règles spécifiques métiers françaises / Chorus Pro etc.)
+**Technos :** Java 17+, Spring Boot, Maven, `ph-schematron`
+
+### Ce qu'il fait
+
+| Étape | Description |
+|---|---|
+| **1. Validation XSD** | Vérifie la structure du XML contre le schéma UBL Invoice 2.1 |
+| **2. Validation Schematron** | Applique les règles métier selon le format choisi |
+
+### Formats supportés
+
+| Format | Schematrons appliqués |
+|---|---|
+| `EN16931` | Règles européennes de base (EN 16931) |
+| `EXTENDED` | Règles CTC-FR EXTENDED + BR-FR (Chorus Pro / réforme française) |
+
+### Résultats retournés
+
+Chaque règle échouée indique :
+- `🔴 [FATAL]` — erreur bloquante (la facture est non conforme)
+- `🟡 [AVERTISSEMENT]` — règle non bloquante (recommandation)
+
+### Endpoint
+
+```
+POST http://localhost:8080/api/v1/validation/ubl
+Content-Type: multipart/form-data
+
+Paramètres :
+  file    → fichier XML de la facture
+  format  → "EN16931" | "EXTENDED"
+```
+
+### Lancer le backend
+
+```bash
+cd backend
+mvn spring-boot:run
+```
+
+L'API démarre sur **http://localhost:8080**.
+
+---
+
+## 🖥️ Frontend — Interface Vue 3
+
+**Technos :** Vue 3, Vite, CSS Vanilla (thème sombre)
+
+### Fonctionnalités
+
+- 📋 Sélection du format de validation (EN16931 / EXTENDED)
+- 📂 Glisser-déposer ou sélection du fichier XML
+- 🔍 Appel à l'API backend et affichage des résultats
+- Résultats color-codés : ✅ succès, ❌ échec, 🔴 fatal, 🟡 avertissement
+- Bouton de réinitialisation pour relancer une validation
+
+### Lancer le frontend
+
+```bash
+cd frontend
+npm install   # première fois uniquement
+npm run dev
+```
+
+L'interface est accessible sur **http://localhost:5173**.
+
+---
+
+## 🚀 Lancer le projet complet
+
+Ouvrir **deux terminaux** :
+
+```bash
+# Terminal 1 — Backend
+cd backend
+mvn spring-boot:run
+
+# Terminal 2 — Frontend
+cd frontend
+npm run dev
+```
+
+Puis ouvrir **http://localhost:5173** dans le navigateur.
+
+---
+
+## 📋 Prérequis
+
+| Outil | Version minimale |
+|---|---|
+| Java | 17 |
+| Maven | 3.8+ |
+| Node.js | 18+ |
+| npm | 9+ |

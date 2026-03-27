@@ -13,7 +13,6 @@ import javax.xml.validation.Validator;
 import org.xml.sax.ErrorHandler;
 import org.xml.sax.SAXParseException;
 import java.io.ByteArrayInputStream;
-import java.sql.Array;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -75,28 +74,31 @@ public class ValidationService {
 
         // 2. Validation des regles metiers (Schematron)
         try {
-            // Créer un tableau de Schematron
-            List<ISchematronResource> schematrons = new ArrayList<>();
+            // Associer chaque Schematron à son label lisible
+            java.util.Map<String, ISchematronResource> schematrons = new java.util.LinkedHashMap<>();
 
             // On ajoute les fichiers Schematron en fonction du format
             if (format.equals("EN16931")) {
-                schematrons.add(SchematronResourceSCH
+                schematrons.put("EN16931", SchematronResourceSCH
                         .fromClassPath("schemas/schematrons/EN16931-UBL-validation-preprocessed.sch"));
 
             } else if (format.equals("EXTENDED")) {
-                schematrons.add(SchematronResourceSCH
+                schematrons.put("EXTENDED", SchematronResourceSCH
                         .fromClassPath("schemas/schematrons/20260216_EXTENDED-CTC-FR-UBL-V1.3.0.sch"));
 
-                schematrons.add(SchematronResourceSCH
+                schematrons.put("BR-FR", SchematronResourceSCH
                         .fromClassPath("schemas/schematrons/20260216_BR-FR-Flux2-Schematron-UBL_V1.3.0.sch"));
             } else {
                 throw new IllegalStateException("Le format de la facture n'est pas reconnu.");
             }
 
-            for (ISchematronResource schematron : schematrons) {
+            for (var entry : schematrons.entrySet()) {
+                String label = entry.getKey();
+                ISchematronResource schematron = entry.getValue();
 
                 if (!schematron.isValidSchematron()) {
-                    throw new IllegalStateException("Le fichier Schematron est introuvable ou invalide.");
+                    throw new IllegalStateException(
+                            "Le fichier Schematron \"" + label + "\" est introuvable ou invalide.");
                 }
 
                 // Exécution du schematron sur la facture
@@ -104,19 +106,34 @@ public class ValidationService {
                         .applySchematronValidationToSVRL(new StreamSource(new ByteArrayInputStream(xmlBytes)));
 
                 if (schResult == null) {
-                    resultats.add("❌ Erreur interne lors de l'application du Schematron.");
+                    resultats.add("❌ Erreur interne lors de l'application du Schematron \"" + label + "\".");
                     return resultats;
                 }
 
                 // Extraction des erreurs (SVRL Failed Assertions)
                 var failedAsserts = SVRLHelper.getAllFailedAssertions(schResult);
                 if (failedAsserts.isEmpty()) {
-                    resultats.add("✅ Validation Schematron EN16931 réussie : Aucune erreur métier !");
+                    resultats.add("✅ Validation schematrons <" + label + "> réussie : Aucune erreur métier !");
                 } else {
-                    resultats
-                            .add("❌ Échec Schematron : " + failedAsserts.size() + " règle(s) métier non respectée(s).");
-                    // Dans une vraie app, on listerait chaque erreur ici, mais pour commencer c'est
-                    // parfait.
+                    long nbFatal = failedAsserts.stream()
+                            .filter(fa -> fa.getFlag() != null && "fatal".equalsIgnoreCase(fa.getFlag().getID()))
+                            .count();
+                    long nbWarning = failedAsserts.size() - nbFatal;
+
+                    String resume = "❌ Échec schematrons <" + label + "> : "
+                            + (nbFatal > 0 ? nbFatal + " erreur(s) fatale(s)" : "")
+                            + (nbFatal > 0 && nbWarning > 0 ? ", " : "")
+                            + (nbWarning > 0 ? nbWarning + " avertissement(s)" : "");
+                    resultats.add(resume);
+
+                    for (var fa : failedAsserts) {
+                        boolean isFatal = fa.getFlag() != null && "fatal".equalsIgnoreCase(fa.getFlag().getID());
+                        String prefix = isFatal ? "🔴 [FATAL] " : "🟡 [AVERTISSEMENT] ";
+                        String id = fa.getID() != null ? "[" + fa.getID() + "] " : "";
+                        String location = fa.getLocation() != null ? " (emplacement : " + fa.getLocation() + ")" : "";
+                        String message = fa.getText() != null ? fa.getText() : "(pas de message)";
+                        resultats.add("  • " + prefix + id + message + location);
+                    }
                 }
             }
 
