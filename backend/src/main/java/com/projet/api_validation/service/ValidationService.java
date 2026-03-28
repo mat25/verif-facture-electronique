@@ -13,21 +13,84 @@ import javax.xml.validation.Validator;
 import org.xml.sax.ErrorHandler;
 import org.xml.sax.SAXParseException;
 import java.io.ByteArrayInputStream;
+import java.net.URL;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 
 @Service
 public class ValidationService {
 
-    public List<String> validerFactureUBL(MultipartFile file, String format) throws Exception {
-        List<String> resultats = new ArrayList<>();
-        byte[] xmlBytes = file.getBytes();
+    // -------------------------------------------------------------------------
+    // Classe interne métier pour encapsuler l'état et le résultat de validation
+    // -------------------------------------------------------------------------
+    private static class ValidationReport {
+        private boolean valid = true;
+        private final List<String> messages = new ArrayList<>();
 
-        // 1. Validation de Structure (XSD)
+        public boolean isValid() {
+            return valid;
+        }
+
+        public List<String> getMessages() {
+            return messages;
+        }
+
+        public void addError(String errorMessage) {
+            this.valid = false;
+            this.messages.add("❌ " + errorMessage);
+        }
+
+        public void addSuccess(String successMessage) {
+            this.messages.add("✅ " + successMessage);
+        }
+
+        public void addDetail(String detailMessage) {
+            this.messages.add(detailMessage);
+        }
+
+        public void merge(ValidationReport other) {
+            this.valid = this.valid && other.valid;
+            this.messages.addAll(other.messages);
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // Méthode publique principale
+    // -------------------------------------------------------------------------
+    public List<String> validerFactureUBL(MultipartFile file, String format) throws Exception {
+        byte[] xmlBytes = file.getBytes();
+        ValidationReport globalReport = new ValidationReport();
+
+        // Étape 1 : Validation structurelle XSD
+        ValidationReport xsdReport = validerFactureXSD(xmlBytes);
+        globalReport.merge(xsdReport);
+
+        if (xsdReport.isValid()) {
+            // Étape 2 : Validation des règles métier (Schematron)
+            ValidationReport schematronReport = validerFactureSchematrons(xmlBytes, format);
+            globalReport.merge(schematronReport);
+        }
+
+        return globalReport.getMessages();
+    }
+
+    // -------------------------------------------------------------------------
+    // Méthode privée : Validation de structure (XSD)
+    // -------------------------------------------------------------------------
+    private ValidationReport validerFactureXSD(byte[] xmlBytes) {
+        ValidationReport report = new ValidationReport();
+
         try {
             SchemaFactory factory = SchemaFactory.newInstance(XMLConstants.W3C_XML_SCHEMA_NS_URI);
-            // On charge le XSD principal UBL 2.1
-            java.net.URL xsdUrl = getClass().getClassLoader().getResource("schemas/xsd/maindoc/UBL-Invoice-2.1.xsd");
+            URL xsdUrl = getClass().getClassLoader().getResource("schemas/xsd/maindoc/UBL-Invoice-2.1.xsd");
+
+            if (xsdUrl == null) {
+                report.addError("Fichier de configuration XSD principal introuvable");
+                return report;
+            }
+
             Schema schema = factory.newSchema(xsdUrl);
             Validator validator = schema.newValidator();
 
@@ -48,83 +111,88 @@ public class ValidationService {
                 }
             });
 
-            // On valide le XML avec le XSD
             try {
                 validator.validate(new StreamSource(new ByteArrayInputStream(xmlBytes)));
             } catch (Exception e) {
-                // Si l'erreur est si grave que le parsing plante avant même de déclencher
-                // l'ErrorHandler
+                // Erreur si grave que le parsing XML plante avant même l'ErrorHandler
                 if (xsdErreurs.isEmpty()) {
-                    resultats.add("❌ Erreur fatale XSD : " + e.getMessage());
-                    return resultats;
+                    report.addError(
+                            "Erreur fatale de structuration XML (Impossible de lire le fichier) : " + e.getMessage());
+                    return report;
                 }
             }
 
             if (!xsdErreurs.isEmpty()) {
-                resultats.add("❌ " + xsdErreurs.size() + " erreur(s) de structure (XSD) trouvées :");
-                resultats.addAll(xsdErreurs);
-                return resultats; // On bloque ici, pas la peine de lancer le Schematron
+                report.addError(xsdErreurs.size() + " erreur(s) de structure (XSD) trouvées :");
+                xsdErreurs.forEach(report::addDetail);
             } else {
-                resultats.add("✅ Validation XSD réussie (Format UBL Invoice 2.1 valide).");
+                report.addSuccess("Validation XSD réussie (Format UBL Invoice 2.1 valide).");
             }
+
         } catch (Exception e) {
-            resultats.add("❌ Erreur interne lors du test XSD : " + e.getMessage());
-            return resultats;
+            report.addError("Erreur interne critique lors du test XSD : " + e.getMessage());
         }
 
-        // 2. Validation des regles metiers (Schematron)
-        try {
-            // Associer chaque Schematron à son label lisible
-            java.util.Map<String, ISchematronResource> schematrons = new java.util.LinkedHashMap<>();
+        return report;
+    }
 
-            // On ajoute les fichiers Schematron en fonction du format
-            if (format.equals("EN16931")) {
+    // -------------------------------------------------------------------------
+    // Méthode privée : Validation des règles métier (Schematron)
+    // -------------------------------------------------------------------------
+    private ValidationReport validerFactureSchematrons(byte[] xmlBytes, String format) {
+        ValidationReport report = new ValidationReport();
+
+        try {
+            Map<String, ISchematronResource> schematrons = new LinkedHashMap<>();
+
+            if ("EN16931".equals(format)) {
                 schematrons.put("EN16931", SchematronResourceSCH
                         .fromClassPath("schemas/schematrons/EN16931-UBL-validation-preprocessed.sch"));
-
-            } else if (format.equals("EXTENDED")) {
+            } else if ("EXTENDED".equals(format)) {
                 schematrons.put("EXTENDED", SchematronResourceSCH
                         .fromClassPath("schemas/schematrons/20260216_EXTENDED-CTC-FR-UBL-V1.3.0.sch"));
-
                 schematrons.put("BR-FR", SchematronResourceSCH
                         .fromClassPath("schemas/schematrons/20260216_BR-FR-Flux2-Schematron-UBL_V1.3.0.sch"));
             } else {
-                throw new IllegalStateException("Le format de la facture n'est pas reconnu.");
+                report.addError("Le format de la facture n'est pas reconnu : " + format);
+                return report;
             }
 
-            for (var entry : schematrons.entrySet()) {
+            for (Map.Entry<String, ISchematronResource> entry : schematrons.entrySet()) {
                 String label = entry.getKey();
                 ISchematronResource schematron = entry.getValue();
 
                 if (!schematron.isValidSchematron()) {
-                    throw new IllegalStateException(
-                            "Le fichier Schematron \"" + label + "\" est introuvable ou invalide.");
+                    report.addError(
+                            "Le fichier Schematron spécifié pour \"" + label + "\" est introuvable ou mal formatté.");
+                    continue; // On passe au schematron suivant s'il y en a un
                 }
 
-                // Exécution du schematron sur la facture
                 var schResult = schematron
                         .applySchematronValidationToSVRL(new StreamSource(new ByteArrayInputStream(xmlBytes)));
 
                 if (schResult == null) {
-                    resultats.add("❌ Erreur interne lors de l'application du Schematron \"" + label + "\".");
-                    return resultats;
+                    report.addError(
+                            "Erreur interne inattendue lors de l'application du fichier Schematron \"" + label + "\".");
+                    return report;
                 }
 
-                // Extraction des erreurs (SVRL Failed Assertions)
                 var failedAsserts = SVRLHelper.getAllFailedAssertions(schResult);
+
                 if (failedAsserts.isEmpty()) {
-                    resultats.add("✅ Validation schematrons <" + label + "> réussie : Aucune erreur métier !");
+                    report.addSuccess("Validation métier Schematrons (" + label + ") réussie : Aucune erreur !");
                 } else {
                     long nbFatal = failedAsserts.stream()
                             .filter(fa -> fa.getFlag() != null && "fatal".equalsIgnoreCase(fa.getFlag().getID()))
                             .count();
                     long nbWarning = failedAsserts.size() - nbFatal;
 
-                    String resume = "❌ Échec schematrons <" + label + "> : "
+                    String resume = "Échec Schematrons (" + label + ") : "
                             + (nbFatal > 0 ? nbFatal + " erreur(s) fatale(s)" : "")
                             + (nbFatal > 0 && nbWarning > 0 ? ", " : "")
                             + (nbWarning > 0 ? nbWarning + " avertissement(s)" : "");
-                    resultats.add(resume);
+
+                    report.addError(resume);
 
                     for (var fa : failedAsserts) {
                         boolean isFatal = fa.getFlag() != null && "fatal".equalsIgnoreCase(fa.getFlag().getID());
@@ -132,15 +200,16 @@ public class ValidationService {
                         String id = fa.getID() != null ? "[" + fa.getID() + "] " : "";
                         String location = fa.getLocation() != null ? " (emplacement : " + fa.getLocation() + ")" : "";
                         String message = fa.getText() != null ? fa.getText() : "(pas de message)";
-                        resultats.add("  • " + prefix + id + message + location);
+
+                        report.addDetail("  • " + prefix + id + message + location);
                     }
                 }
             }
 
         } catch (Exception e) {
-            resultats.add("❌ Erreur pendant le traitement Schematron : " + e.getMessage());
+            report.addError("Erreur technique pendant le traitement Schematron : " + e.getMessage());
         }
 
-        return resultats;
+        return report;
     }
 }
