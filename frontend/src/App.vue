@@ -31,6 +31,18 @@
           </div>
         </div>
 
+        <!-- Sélection version schématrons -->
+        <div class="field">
+          <label class="label" for="version">Version des schématrons</label>
+          <div class="select-wrapper">
+            <select id="version" v-model="version" class="select">
+              <option value="1.3.1">v1.3.1 — Avril 2026 (recommandée)</option>
+              <option value="1.3.0">v1.3.0 — Février 2026</option>
+            </select>
+            <span class="select-chevron">▾</span>
+          </div>
+        </div>
+
         <!-- Upload fichier -->
         <div class="field">
           <label class="label">Fichier XML de la facture</label>
@@ -41,7 +53,7 @@
             @dragleave.prevent="dragging = false"
             @dragover.prevent
             @drop.prevent="onDrop"
-            @click="$refs.fileInput.click()"
+            @click="ouvrirSelecteur()"
           >
             <input
               ref="fileInput"
@@ -67,7 +79,7 @@
         <button
           type="submit"
           class="btn"
-          :disabled="loading || !format || !fichier"
+          :disabled="loading || !format || !fichier || !version"
           :class="{ 'btn--loading': loading }"
         >
           <span v-if="!loading">🔍 Lancer la validation</span>
@@ -90,7 +102,10 @@
             <span class="result-text">{{ msg }}</span>
           </li>
         </ul>
-        <button class="btn-reset" @click="reset">↩ Nouvelle validation</button>
+        <div class="reset-actions">
+          <button class="btn-reset" @click="nouvelleValidation" :disabled="loading">↻ Revalider (même fichier)</button>
+          <button class="btn-reset" @click="reset">↩ Nouvelle validation</button>
+        </div>
       </section>
     </transition>
 
@@ -109,23 +124,44 @@ import { ref } from 'vue'
 
 const API_URL = 'http://localhost:8080/api/v1/validation/ubl'
 
-const format   = ref('')
-const fichier  = ref(null)
-const loading  = ref(false)
-const resultats = ref([])
-const erreur   = ref(null)
-const dragging = ref(false)
-const fileInput = ref(null)
+const format      = ref('')
+const version     = ref('1.3.1')
+const fichier     = ref(null)       // File object courant (pour affichage)
+const fileHandle  = ref(null)       // FileSystemFileHandle (pour relire depuis le disque)
+const loading     = ref(false)
+const resultats   = ref([])
+const erreur      = ref(null)
+const dragging    = ref(false)
+const fileInput   = ref(null)
+
+// Ouvre le sélecteur natif et stocke le handle pour pouvoir relire le fichier plus tard
+async function ouvrirSelecteur() {
+  if (window.showOpenFilePicker) {
+    try {
+      const [handle] = await window.showOpenFilePicker({
+        types: [{ description: 'Fichiers XML', accept: { 'application/xml': ['.xml'] } }],
+        multiple: false
+      })
+      fileHandle.value = handle
+      fichier.value = await handle.getFile()
+    } catch (e) {
+      // L'utilisateur a annulé la sélection
+    }
+  } else {
+    // Fallback navigateurs sans File System Access API
+    fileInput.value.click()
+  }
+}
 
 function onFileChange(e) {
   const f = e.target.files[0]
-  if (f) fichier.value = f
+  if (f) { fichier.value = f; fileHandle.value = null }
 }
 
 function onDrop(e) {
   dragging.value = false
   const f = e.dataTransfer.files[0]
-  if (f && f.name.endsWith('.xml')) fichier.value = f
+  if (f && f.name.endsWith('.xml')) { fichier.value = f; fileHandle.value = null }
 }
 
 function formatBytes(bytes) {
@@ -143,14 +179,20 @@ function getClass(msg) {
 }
 
 async function valider() {
-  if (!fichier.value || !format.value) return
+  if (!fichier.value || !format.value || !version.value) return
   loading.value = true
   resultats.value = []
   erreur.value = null
 
+  // Si on a un handle, on relit le fichier depuis le disque (version la plus récente)
+  if (fileHandle.value) {
+    fichier.value = await fileHandle.value.getFile()
+  }
+
   const body = new FormData()
   body.append('file', fichier.value)
   body.append('format', format.value)
+  body.append('version', version.value)
 
   try {
     const res = await fetch(API_URL, { method: 'POST', body })
@@ -163,10 +205,17 @@ async function valider() {
   }
 }
 
+async function nouvelleValidation() {
+  // Relit le fichier depuis le disque (si handle disponible) et relance
+  valider()
+}
+
 function reset() {
   resultats.value = []
   fichier.value = null
+  fileHandle.value = null
   format.value = ''
+  version.value = '1.3.1'
   if (fileInput.value) fileInput.value.value = ''
 }
 </script>
@@ -438,6 +487,11 @@ function reset() {
   white-space: pre-wrap;
   word-break: break-word;
 }
+.reset-actions {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
 .btn-reset {
   margin-top: 4px;
   background: none;
@@ -450,9 +504,13 @@ function reset() {
   font-family: inherit;
   transition: border-color 0.2s, color 0.2s;
 }
-.btn-reset:hover {
+.btn-reset:hover:not(:disabled) {
   border-color: var(--accent);
   color: var(--accent2);
+}
+.btn-reset:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
 }
 
 /* ── Banner erreur réseau ── */

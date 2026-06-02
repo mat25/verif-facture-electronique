@@ -59,7 +59,7 @@ public class ValidationService {
     // -------------------------------------------------------------------------
     // Méthode publique principale
     // -------------------------------------------------------------------------
-    public List<String> validerFactureUBL(MultipartFile file, String format) throws Exception {
+    public List<String> validerFactureUBL(MultipartFile file, String format, String version) throws Exception {
         byte[] xmlBytes = file.getBytes();
         ValidationReport globalReport = new ValidationReport();
 
@@ -69,11 +69,29 @@ public class ValidationService {
 
         if (xsdReport.isValid()) {
             // Étape 2 : Validation des règles métier (Schematron)
-            ValidationReport schematronReport = validerFactureSchematrons(xmlBytes, format);
+            ValidationReport schematronReport = validerFactureSchematrons(xmlBytes, format, version);
             globalReport.merge(schematronReport);
         }
 
         return globalReport.getMessages();
+    }
+
+    // -------------------------------------------------------------------------
+    // Méthode utilitaire : recherche un fichier schématron par mot-clé dans un dossier de classpath
+    // -------------------------------------------------------------------------
+    private String findSchematronFile(String basePath, String keyword) {
+        try {
+            URL dirUrl = getClass().getClassLoader().getResource(basePath);
+            if (dirUrl == null) return null;
+            java.io.File dir = new java.io.File(dirUrl.toURI());
+            if (!dir.isDirectory()) return null;
+            for (java.io.File f : dir.listFiles()) {
+                if (f.getName().contains(keyword) && f.getName().endsWith(".sch")) {
+                    return basePath + f.getName();
+                }
+            }
+        } catch (Exception ignored) {}
+        return null;
     }
 
     // -------------------------------------------------------------------------
@@ -139,8 +157,13 @@ public class ValidationService {
     // -------------------------------------------------------------------------
     // Méthode privée : Validation des règles métier (Schematron)
     // -------------------------------------------------------------------------
-    private ValidationReport validerFactureSchematrons(byte[] xmlBytes, String format) {
+    private ValidationReport validerFactureSchematrons(byte[] xmlBytes, String format, String version) {
         ValidationReport report = new ValidationReport();
+
+        if (!version.matches("^[0-9]+\\.[0-9]+\\.[0-9]+$")) {
+            report.addError("Numéro de version invalide : " + version);
+            return report;
+        }
 
         try {
             Map<String, ISchematronResource> schematrons = new LinkedHashMap<>();
@@ -149,10 +172,19 @@ public class ValidationService {
                 schematrons.put("EN16931", SchematronResourceSCH
                         .fromClassPath("schemas/schematrons/EN16931-UBL-validation-preprocessed.sch"));
             } else if ("EXTENDED".equals(format)) {
-                schematrons.put("EXTENDED", SchematronResourceSCH
-                        .fromClassPath("schemas/schematrons/20260216_EXTENDED-CTC-FR-UBL-V1.3.0.sch"));
-                schematrons.put("BR-FR", SchematronResourceSCH
-                        .fromClassPath("schemas/schematrons/20260216_BR-FR-Flux2-Schematron-UBL_V1.3.0.sch"));
+                String basePath = "schemas/schematrons/" + version + "/";
+                // Recherche dynamique des fichiers correspondant à la version
+                String extendedFile = findSchematronFile(basePath, "EXTENDED-CTC-FR-UBL");
+                String brFrFile    = findSchematronFile(basePath, "BR-FR-Flux2-Schematron-UBL");
+
+                if (extendedFile == null || brFrFile == null) {
+                    report.addError("Fichiers schématrons introuvables pour la version " + version
+                            + ". Vérifiez que le dossier schemas/schematrons/" + version + "/ existe.");
+                    return report;
+                }
+
+                schematrons.put("EXTENDED", SchematronResourceSCH.fromClassPath(extendedFile));
+                schematrons.put("BR-FR",    SchematronResourceSCH.fromClassPath(brFrFile));
             } else {
                 report.addError("Le format de la facture n'est pas reconnu : " + format);
                 return report;
